@@ -6,6 +6,7 @@ references/
 stuff/
 
 assets/*.ply
+assets/environments/*.ply
 datasets/
 
 ### venv template

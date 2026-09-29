@@ -517,7 +517,7 @@ if __name__ == '__main__':
     context = Context()
 
     scene = Scene()
-    scene.add_instance(Asset.from_file(name='seville', file_path='assets/seville_filtered.ply', radii=0.01))
+    scene.add_instance(Asset.from_file(name='seville', file_path='assets/environments/seville_filtered.ply', radii=0.01))
     scene.add_sky('assets/textures/kloppenheim_05_4k.exr')
 
     renderer = Renderer(model=model, scene=scene, agent=Agent())

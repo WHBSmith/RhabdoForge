@@ -23,6 +23,21 @@ gets its own timestamped set of files.
 - `RECORD_KEY`: the toggle key, if you want to rebind it
 - `PUPIL_DRIVE`: Fixed pupil state (light adaptation). 0.0 for dark adapted, 1.0 for light adapted **[*]**
 
+The recorder also supports reproducible scripted paths. Asset and output paths
+are anchored to the project, so it can be launched from any working directory:
+
+```bash
+DISPLAY=:0 mamba run -n microDepth python \
+	/path/to/micro_depth/external/RhabdoForge/examples/record_dataset.py \
+	--mode scripted --path straight --steps 100 --speed 0.5
+```
+
+Available scripted paths are `straight` and `circle`. `--steps` controls the
+number of frames and `--speed` is metres per second. The default output is
+`micro_depth/data/generated`; override it with `--output-dir`. The selected
+environment can be overridden with `--environment-file`. The default
+`interactive` mode remains unchanged.
+
 > **[*]** When dynamics are enabled, the pupil adaptation state should be fixed (because the dynamics of it are borked currently). Pick whether you want your fly to have better acuity, lower sensitivity (light adapted) or vice versa (dark adapted).
 
 ## Output format

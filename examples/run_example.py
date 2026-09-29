@@ -34,7 +34,7 @@ if __name__ == "__main__":
     scene.add_sky('assets/textures/kloppenheim_05_4k.exr')  # from https://polyhaven.com/a/kloppenheim_05
 
     # Create a point cloud asset from a file
-    seville = Asset.from_file(name='seville', file_path='assets/seville_filtered.ply')
+    seville = Asset.from_file(name='seville', file_path='assets/environments/seville_filtered.ply')
     scene.add_instance(seville)
 
 
