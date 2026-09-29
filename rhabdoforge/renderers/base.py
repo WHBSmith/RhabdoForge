@@ -85,6 +85,7 @@ class Renderer:
                  enable_direct: bool = True,
                  enable_shadows: bool = True,
                  enable_ambient: bool = True,
+                 capture_raw_depth: bool = False,
                  resource_manager: Optional['GPUResourceManager'] = None,
                  context: Optional['Context'] = None
                  ):
@@ -117,6 +118,7 @@ class Renderer:
         self._use_hybrid_sampling = False
         self._randomness_mode = to_enum(randomness_mode, RandomnessMode)
         self._sampling_mode = to_enum(sampling_mode, SamplingMode)
+        self._capture_raw_depth = capture_raw_depth
 
         # Render surfaces and related things
         self._bg_col_linear = tuple(c ** 2.2 for c in self.scene.background_color)  # TODO: what if already linear
@@ -310,7 +312,11 @@ class Renderer:
                                   supports_async=True,
                                   _async_reader=self._readback_async)
         self.eye_buffers.allocate('depth',
-                                  dtype=np.dtype((np.float32, 2)),
+                                  dtype=np.dtype((np.float32, 4)),
+                                  count=self._model.size * self._batch_size,
+                                  usage=GL_DYNAMIC_DRAW)
+        self.eye_buffers.allocate('depth_stats_b',
+                                  dtype=np.dtype((np.float32, 4)),
                                   count=self._model.size * self._batch_size,
                                   usage=GL_DYNAMIC_DRAW)
 
@@ -701,7 +707,8 @@ class Renderer:
 
         with self.reduction_shader as shader:
             with self.eye_buffers.grouped_bind(
-                    ['rays_intermediate', 'rhab_static', 'colors', 'depth', 'ema_state', 'rhab_dynamic']):
+                    ['rays_intermediate', 'rhab_static', 'colors', 'depth',
+                     'depth_stats_b', 'ema_state', 'rhab_dynamic']):
                 self._eye_uniforms.apply(shader)
 
                 rays_elements = self._model.N if self._model.bundle.fused_rhabdoms else self._model.size
@@ -763,19 +770,7 @@ class Renderer:
         self._pbo_index = next_pbo_index
         return out_array
 
-    def _read_depth_sync(self) -> np.ndarray:
-        """Read reduced depth and valid-hit counts for the current frame."""
-        glFinish()
-        with self.eye_buffers['depth'].bind():
-            data_bytes = glGetBufferSubData(
-                GL_SHADER_STORAGE_BUFFER, 0, self._model.size * 8
-            )
-        values = np.frombuffer(data_bytes, dtype=np.float32).reshape(self._model.size, 2)
-        depth = values[:, 0].copy()
-        depth[values[:, 1] <= 0.0] = np.nan
-        return depth
-
-    def _read_outputs_sync(self) -> Tuple[np.ndarray, np.ndarray]:
+    def _read_outputs_sync(self) -> Tuple[np.ndarray, Dict[str, np.ndarray]]:
         """Read colour and depth for the same completed frame.
 
         The legacy colour path is ping-pong asynchronous and therefore returns
@@ -787,15 +782,33 @@ class Renderer:
             colour_bytes = glGetBufferSubData(
                 GL_SHADER_STORAGE_BUFFER, 0, self._model.size * 16
             )
-        with self.eye_buffers['depth'].bind():
-            depth_bytes = glGetBufferSubData(
-                GL_SHADER_STORAGE_BUFFER, 0, self._model.size * 8
-            )
+        depth_values = self.eye_buffers['depth'].read(count=self._model.size)
+        count_values = self.eye_buffers['depth_stats_b'].read(count=self._model.size)
         colours = np.frombuffer(colour_bytes, dtype=np.float32).reshape(self._model.size, 4).copy()
-        depth_values = np.frombuffer(depth_bytes, dtype=np.float32).reshape(self._model.size, 2)
-        depth = depth_values[:, 0].copy()
-        depth[depth_values[:, 1] <= 0.0] = np.nan
-        return colours, depth
+        count = count_values[:, 0].copy()
+        valid = count > 0.0
+        total = depth_values[:, 0]
+        mean = np.full(count.shape, np.nan, dtype=np.float32)
+        mean[valid] = total[valid] / count[valid]
+        variance = np.full(count.shape, np.nan, dtype=np.float32)
+        variance[valid] = np.maximum(
+            depth_values[valid, 1] / count[valid] - mean[valid] ** 2, 0.0
+        )
+        return colours, {
+            'mean': mean,
+            'min': np.where(valid, depth_values[:, 2], np.nan),
+            'max': np.where(valid, depth_values[:, 3], np.nan),
+            'std': np.sqrt(variance),
+            'valid_count': count.astype(np.int32),
+        }
+
+    def _read_raw_depth_sync(self) -> np.ndarray:
+        """Read per-ray primary depths for an explicitly diagnostic render."""
+        if not self._capture_raw_depth:
+            raise RuntimeError('raw depth capture is disabled')
+        rays = self.eye_buffers['rays_intermediate'].read()
+        rays_elements = self._model.N if self._model.bundle.fused_rhabdoms else self._model.size
+        return rays['depth_data'][:, 0].reshape(rays_elements, self._samples_per_rhab)
 
     def _tonemap_pass(self) -> None:
 
@@ -1088,9 +1101,15 @@ class Renderer:
                 # Depth is paired with the current colour frame using a
                 # synchronous read. The old async path returns the previous
                 # colour frame and cannot safely be paired with current depth.
-                out_array, depth = self._read_outputs_sync()
+                out_array, depth_stats = self._read_outputs_sync()
+                raw_depth = self._read_raw_depth_sync() if self._capture_raw_depth else None
                 if out_array.size > 0:
-                    out = VisualOutput(out_array, self._model, depth=depth)
+                    out = VisualOutput(
+                        out_array, self._model,
+                        depth=depth_stats['mean'],
+                        depth_stats=depth_stats,
+                        raw_depth=raw_depth,
+                    )
                 self._frame_index = 0   # frame consumed, reset counter
 
             elif self._frame_index >= self._batch_size:

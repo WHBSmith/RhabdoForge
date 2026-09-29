@@ -12,7 +12,10 @@ layout(std430, binding = BINDING_RHAB_STATIC)       readonly buffer  RhabStaticB
 layout(std430, binding = BINDING_COLORS)            writeonly buffer ColorOutput      { vec4 history_data[]; };
 layout(std430, binding = BINDING_EMA_STATE)         buffer           EmaHistory       { vec4 ema_state[]; };
 layout(std430, binding = BINDING_RHAB_DYNAMIC)      readonly buffer  RhabDynamicBlock { RhabdomereDynamic rhab_dynamic[]; };
-layout(std430, binding = BINDING_DEPTH)             writeonly buffer DepthOutput     { vec2 depth_output[]; };
+// stats_a = (sum, sum of squares, minimum, maximum)
+// stats_b = (valid count, unused, unused, unused)
+layout(std430, binding = BINDING_DEPTH)             writeonly buffer DepthOutput     { vec4 depth_stats_a[]; };
+layout(std430, binding = BINDING_DEPTH_STATS_B)     writeonly buffer DepthOutputB    { vec4 depth_stats_b[]; };
 struct RayResult {
     vec4 color_weight;
     vec4 depth_data;
@@ -30,7 +33,8 @@ uniform float dt;   // seconds since last frame
 uniform float photon_concentration_factor;
 
 shared vec4 s_data[SAMPLE_GROUP_SIZE]; // Shared memory for the workgroup
-shared vec2 s_depth[SAMPLE_GROUP_SIZE]; // (sum of valid hits, valid-hit count)
+shared vec4 s_depth_a[SAMPLE_GROUP_SIZE]; // (sum, sumsq, min, max)
+shared vec4 s_depth_b[SAMPLE_GROUP_SIZE]; // (valid count, unused, unused, unused)
 
 const float MAX_SAMPLE_RADIANCE = 100.0;
 
@@ -45,10 +49,14 @@ void main() {
         vec4 val = ray_results[start_idx + tid].color_weight;
         s_data[tid] = vec4(min(val.rgb, vec3(MAX_SAMPLE_RADIANCE)) * val.a, val.a);
         float depth = ray_results[start_idx + tid].depth_data.x;
-        s_depth[tid] = (depth >= 0.0) ? vec2(depth, 1.0) : vec2(0.0);
+        s_depth_a[tid] = (depth >= 0.0)
+            ? vec4(depth, depth * depth, depth, depth)
+            : vec4(0.0, 0.0, 1.0 / 0.0, -1.0 / 0.0);
+        s_depth_b[tid] = (depth >= 0.0) ? vec4(1.0, 0.0, 0.0, 0.0) : vec4(0.0);
     } else {
         s_data[tid] = vec4(0.0);
-        s_depth[tid] = vec2(0.0);
+        s_depth_a[tid] = vec4(0.0, 0.0, 1.0 / 0.0, -1.0 / 0.0);
+        s_depth_b[tid] = vec4(0.0);
     }
     memoryBarrierShared();
     barrier();
@@ -57,7 +65,10 @@ void main() {
     for (uint s = gl_WorkGroupSize.x / 2; s > 0; s >>= 1) {
         if (tid < s) {
             s_data[tid] += s_data[tid + s];
-            s_depth[tid] += s_depth[tid + s];
+            s_depth_a[tid].xy += s_depth_a[tid + s].xy;
+            s_depth_a[tid].z = min(s_depth_a[tid].z, s_depth_a[tid + s].z);
+            s_depth_a[tid].w = max(s_depth_a[tid].w, s_depth_a[tid + s].w);
+            s_depth_b[tid] += s_depth_b[tid + s];
         }
         barrier();
     }
@@ -118,11 +129,9 @@ void main() {
 
         uint out_idx = (frame_offset * nb_rhabdomeres) + rhab_idx;
 
-        // Store mean valid primary-ray distance and valid-hit count. A zero
-        // count is an invalid depth measurement; Python converts it to NaN.
-        depth_output[out_idx] = (s_depth[0].y > 0.0)
-            ? vec2(s_depth[0].x / s_depth[0].y, s_depth[0].y)
-            : vec2(0.0);
+        // Store moments and extrema. Python derives mean and standard deviation.
+        depth_stats_a[out_idx] = s_depth_a[0];
+        depth_stats_b[out_idx] = s_depth_b[0];
 
         // RGB channels: Integrated and scaled by gain
         // Alpha channel: The adaptation/gain factor itself

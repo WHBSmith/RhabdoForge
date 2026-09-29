@@ -222,13 +222,17 @@ class VisualOutput(SignalView):
         .raw_radiance -> (..., )  Physical light intensity recovered by 'un-baking'
                                   the adaptation factor.
     """
-    __slots__ = ('_model', '_coords', '_is_time_series', '_depth')
+    __slots__ = ('_model', '_coords', '_is_time_series', '_depth', '_depth_stats', '_raw_depth')
 
     def __init__(self, data: Any, model: 'Model', coords: str = 'rhabdomeres', is_time_series: Optional[bool] = None,
-                 depth: Optional[np.ndarray] = None):
+                 depth: Optional[np.ndarray] = None,
+                 depth_stats: Optional[dict] = None,
+                 raw_depth: Optional[np.ndarray] = None):
         super().__init__(np.asarray(data))
         self._model = model
         self._depth = None if depth is None else np.asarray(depth)
+        self._depth_stats = depth_stats
+        self._raw_depth = raw_depth
         self._coords = coords
 
         if self._data.shape[-2] % model.shape[1] != 0 and coords == 'rhabdomeres':
@@ -246,6 +250,16 @@ class VisualOutput(SignalView):
     def depth(self) -> Optional[np.ndarray]:
         """Mean valid primary-ray depth in metres, if requested by the renderer."""
         return self._depth
+
+    @property
+    def depth_stats(self) -> Optional[dict]:
+        """Reduced primary-ray statistics, if requested by the renderer."""
+        return self._depth_stats
+
+    @property
+    def raw_depth(self) -> Optional[np.ndarray]:
+        """Per-ray primary depths for diagnostic renders only."""
+        return self._raw_depth
 
     def __repr__(self) -> str:
         t_str = f'Time={self.shape[0]}, ' if self._is_time_series else ''
