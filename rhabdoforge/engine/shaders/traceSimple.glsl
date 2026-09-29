@@ -5,14 +5,17 @@
 
 #include "lighting.glsl"
 
-vec3 trace_simple(Ray r) {
+vec3 trace_simple(Ray r, out float primary_depth) {
     vec3 direction = 1.0 / r.inv_direction;
     HitInfo closest_hit;
     traverse_tlas(r, direction, closest_hit);
 
     if (!closest_hit.found) {
+        primary_depth = -1.0;
         return get_sky_color(direction, true);
     }
+
+    primary_depth = closest_hit.t;
 
     vec3 surface_color = get_surface_color(closest_hit);
     vec3 hit_pos = r.origin + direction * closest_hit.t;
@@ -36,8 +39,8 @@ vec3 trace_simple(Ray r) {
     return result;
 }
 
-vec3 trace(Ray r, inout uint rng_state) {
-    return trace_simple(r);
+vec3 trace(Ray r, inout uint rng_state, out float primary_depth) {
+    return trace_simple(r, primary_depth);
 }
 
 #endif // TRACE_SIMPLE_GLSL

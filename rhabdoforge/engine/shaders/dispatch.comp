@@ -16,7 +16,14 @@ layout (local_size_x = SAMPLE_GROUP_SIZE, local_size_y = 1, local_size_z = 1) in
 layout(std430, binding = BINDING_RHAB_STATIC) readonly buffer RhabStaticBlock { RhabdomereStatic    rhab_static[];  };
 layout(std430, binding = BINDING_RHAB_DYNAMIC) readonly buffer RhabDynamicBlock { RhabdomereDynamic rhab_dynamic[]; };
 layout(std430, binding = BINDING_OMM_STATIC) readonly buffer OmmatidiumStaticBlock { OmmatidiumStatic        omm_static[];  };
-layout(std430, binding = BINDING_RAYS_INTERMEDIATE) writeonly buffer RayResultBuffer { vec4       ray_results[];  };
+struct RayResult {
+    vec4 color_weight;
+    // Use a second vec4 rather than float + vec3: this makes the SSBO stride
+    // unambiguously 32 bytes under std430 on all GLSL implementations.
+    vec4 depth_data;
+};
+
+layout(std430, binding = BINDING_RAYS_INTERMEDIATE) writeonly buffer RayResultBuffer { RayResult ray_results[]; };
 
 // Uniforms
 uniform uint dither_counter;
@@ -90,9 +97,11 @@ void main() {
     ray.t = 1.0/0.0;
     ray.inv_direction = 1.0 / direction;
 
-    vec3 final_color = trace(ray, rng_state);
+    float primary_depth;
+    vec3 final_color = trace(ray, rng_state, primary_depth);
 
     // Alpha channel stores ray weight for reduction.comp
     uint global_id = ray_group_idx * uint(nb_samples) + sample_idx;
-    ray_results[global_id] = vec4(final_color, ray_weight);
+    ray_results[global_id].color_weight = vec4(final_color, ray_weight);
+    ray_results[global_id].depth_data = vec4(primary_depth, 0.0, 0.0, 0.0);
 }

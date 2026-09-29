@@ -49,7 +49,8 @@ void main() {
         r.t = 1.0/0.0;
         r.inv_direction = 1.0 / direction;
 
-        accumulated_color += trace(r, rng_state);
+        float unused_depth;
+        accumulated_color += trace(r, rng_state, unused_depth);
     }
 
     // Trace and write

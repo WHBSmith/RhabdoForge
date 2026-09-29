@@ -7,9 +7,13 @@
 
 uniform int max_bounces;
 
-vec3 trace_path(Ray r, inout uint rng_state) {
+vec3 trace_path(Ray r, inout uint rng_state, out float primary_depth) {
     vec3 throughput = vec3(1.0);
     vec3 radiance = vec3(0.0);
+
+    // Depth is the first surface hit by the primary ray. Secondary path
+    // bounces must not change the supervised geometric target.
+    primary_depth = -1.0;
 
     vec3 direction = 1.0 / r.inv_direction;
 
@@ -21,6 +25,10 @@ vec3 trace_path(Ray r, inout uint rng_state) {
             // Sky contribution (includes sun disk for directional lights)
             radiance += throughput * get_sky_color(direction, bounce == 0);
             break;
+        }
+
+        if (bounce == 0) {
+            primary_depth = hit.t;
         }
 
         vec3 hit_pos = r.origin + direction * hit.t;
@@ -62,8 +70,8 @@ vec3 trace_path(Ray r, inout uint rng_state) {
     return radiance;
 }
 
-vec3 trace(Ray r, inout uint rng_state) {
-    return trace_path(r, rng_state);
+vec3 trace(Ray r, inout uint rng_state, out float primary_depth) {
+    return trace_path(r, rng_state, primary_depth);
 }
 
 #endif // TRACE_PATH_GLSL

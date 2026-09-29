@@ -295,7 +295,10 @@ class Renderer:
                                   data=waveguide_lut,
                                   usage=GL_STATIC_DRAW)
         self.eye_buffers.allocate('rays_intermediate',
-                                  dtype=np.dtype((np.float32, 4)),
+                                  dtype=np.dtype([
+                                      ('color_weight', np.float32, (4,)),
+                                      ('depth_data', np.float32, (4,)),
+                                  ]),
                                   count=rays_elements * self._samples_per_rhab,
                                   usage=GL_DYNAMIC_DRAW)
 
@@ -306,6 +309,10 @@ class Renderer:
                                   usage=GL_DYNAMIC_DRAW,
                                   supports_async=True,
                                   _async_reader=self._readback_async)
+        self.eye_buffers.allocate('depth',
+                                  dtype=np.dtype((np.float32, 2)),
+                                  count=self._model.size * self._batch_size,
+                                  usage=GL_DYNAMIC_DRAW)
 
         # All buffers allocated (baker ones + eye_buffers ones): Compile the main shaders
         self._current_defines = self._collect_defines()
@@ -694,7 +701,7 @@ class Renderer:
 
         with self.reduction_shader as shader:
             with self.eye_buffers.grouped_bind(
-                    ['rays_intermediate', 'rhab_static', 'colors', 'ema_state', 'rhab_dynamic']):
+                    ['rays_intermediate', 'rhab_static', 'colors', 'depth', 'ema_state', 'rhab_dynamic']):
                 self._eye_uniforms.apply(shader)
 
                 rays_elements = self._model.N if self._model.bundle.fused_rhabdoms else self._model.size
@@ -755,6 +762,40 @@ class Renderer:
 
         self._pbo_index = next_pbo_index
         return out_array
+
+    def _read_depth_sync(self) -> np.ndarray:
+        """Read reduced depth and valid-hit counts for the current frame."""
+        glFinish()
+        with self.eye_buffers['depth'].bind():
+            data_bytes = glGetBufferSubData(
+                GL_SHADER_STORAGE_BUFFER, 0, self._model.size * 8
+            )
+        values = np.frombuffer(data_bytes, dtype=np.float32).reshape(self._model.size, 2)
+        depth = values[:, 0].copy()
+        depth[values[:, 1] <= 0.0] = np.nan
+        return depth
+
+    def _read_outputs_sync(self) -> Tuple[np.ndarray, np.ndarray]:
+        """Read colour and depth for the same completed frame.
+
+        The legacy colour path is ping-pong asynchronous and therefore returns
+        the previous frame. Depth must be paired with the same visual frame,
+        so the depth-enabled path uses a synchronous read for now.
+        """
+        glFinish()
+        with self.eye_buffers['colors'].bind():
+            colour_bytes = glGetBufferSubData(
+                GL_SHADER_STORAGE_BUFFER, 0, self._model.size * 16
+            )
+        with self.eye_buffers['depth'].bind():
+            depth_bytes = glGetBufferSubData(
+                GL_SHADER_STORAGE_BUFFER, 0, self._model.size * 8
+            )
+        colours = np.frombuffer(colour_bytes, dtype=np.float32).reshape(self._model.size, 4).copy()
+        depth_values = np.frombuffer(depth_bytes, dtype=np.float32).reshape(self._model.size, 2)
+        depth = depth_values[:, 0].copy()
+        depth[depth_values[:, 1] <= 0.0] = np.nan
+        return colours, depth
 
     def _tonemap_pass(self) -> None:
 
@@ -1044,10 +1085,12 @@ class Renderer:
         out = None
         if readback:
             if self.runs_interactive or self._batch_size == 1:
-                # Interactive path: return previous frame via ping-pong PBO
-                out_array = self._readback_async()
+                # Depth is paired with the current colour frame using a
+                # synchronous read. The old async path returns the previous
+                # colour frame and cannot safely be paired with current depth.
+                out_array, depth = self._read_outputs_sync()
                 if out_array.size > 0:
-                    out = VisualOutput(out_array, self._model)
+                    out = VisualOutput(out_array, self._model, depth=depth)
                 self._frame_index = 0   # frame consumed, reset counter
 
             elif self._frame_index >= self._batch_size:
