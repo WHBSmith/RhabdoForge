@@ -42,9 +42,13 @@ environment can be overridden with `--environment-file`. The default
 
 ## Output format
 
-Each take generates three files with the same timestamped name:
+Each run generates three files in the selected output directory:
 
-`datasets/seville_20260101_143000.{parquet,_layout.npz,_meta.json}`:
+```text
+data.parquet
+layout.npz
+metadata.json
+```
 
 ### `<take>.parquet`
 

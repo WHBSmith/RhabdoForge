@@ -1,7 +1,6 @@
 import json
 import argparse
 from pathlib import Path
-from datetime import datetime
 import numpy as np
 import polars as pl
 
@@ -50,20 +49,18 @@ def save_take(rows: list, layout: dict, meta: dict) -> None:
         return
 
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    stem = f"{meta['environment']}_{datetime.now():%Y%m%d_%H%M%S}"
-
     df = pl.DataFrame(rows).with_columns(
         pl.col('visual_output').cast(pl.List(pl.Float32)),
         pl.col('depth').cast(pl.List(pl.Float32)),
     )
-    df.write_parquet(OUTPUT_DIR / f'{stem}.parquet')
+    df.write_parquet(OUTPUT_DIR / 'data.parquet')
 
-    np.savez(OUTPUT_DIR / f'{stem}_layout.npz', **layout)
+    np.savez(OUTPUT_DIR / 'layout.npz', **layout)
 
-    with open(OUTPUT_DIR / f'{stem}_meta.json', 'w') as f:
+    with open(OUTPUT_DIR / 'metadata.json', 'w') as f:
         json.dump(meta, f, indent=2)
 
-    print(f'[record] saved {len(rows)} frames -> {stem}.parquet')
+    print(f'[record] saved {len(rows)} frames -> {OUTPUT_DIR}')
 
 
 def parse_args() -> argparse.Namespace:
